@@ -1,66 +1,107 @@
 import socket
+import ssl
+import threading
 import os
 import hashlib
-import json
-import time
 
-PORT = 5001
-ADDR = '127.0.0.1'
-file_name = "luffy.jpg"
-CHUNK_SIZE = 4096
-TIMEOUT = 5
+SERVER_IP = "0.0.0.0"
+TCP_PORT = 5003
+CHUNK_SIZE = 1024
 
-server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-server.bind((ADDR, PORT))
-server.settimeout(TIMEOUT)
-print(f"Listening on {ADDR}:{PORT}")
+CERT = "server.crt"
+KEY = "server.key"
 
-try:
-    data, client_addr = server.recvfrom(1024)
-    print(f"Client connected from {client_addr}")
-    
-    file_size = os.path.getsize(file_name)
-    with open(file_name, 'rb') as f:
-        file_hash = hashlib.md5(f.read()).hexdigest()
-    
-    metadata = {
-        'filename': file_name,
-        'size': file_size,
-        'hash': file_hash,
-        'chunk_size': CHUNK_SIZE
-    }
-    server.sendto(json.dumps(metadata).encode('utf-8'), client_addr)
-    
-    with open(file_name, 'rb') as f:
-        chunk_num = 0
+
+def get_hash(filename):
+    h = hashlib.sha256()
+    with open(filename, "rb") as f:
+        while chunk := f.read(4096):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def udp_transfer(filename, offset, client_ip, client_port):
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    with open(filename, "rb") as f:
+        f.seek(offset)
+        seq = offset // CHUNK_SIZE
+
         while True:
             chunk = f.read(CHUNK_SIZE)
             if not chunk:
                 break
-            
-            msg = {
-                'chunk_num': chunk_num,
-                'data': chunk.hex()
-            }
-            server.sendto(json.dumps(msg).encode('utf-8'), client_addr)
-            
-            try:
-                ack, _ = server.recvfrom(1024)
-                ack_data = json.loads(ack.decode('utf-8'))
-                if ack_data['chunk_num'] == chunk_num:
-                    print(f"Chunk {chunk_num} sent and acknowledged")
-            except socket.timeout:
-                print(f"Timeout on chunk {chunk_num}, resending...")
-                pass
-            
-            chunk_num += 1
-    
-    final_msg = json.dumps({'chunk_num': -1, 'data': ''}).encode('utf-8')
-    server.sendto(final_msg, client_addr)
-    
-    print("File transfer complete")
-    
-except Exception as e:
-    print(f"Error: {e}")
-finally:
-    server.close()
+
+            packet = f"{seq}|".encode() + chunk
+
+            while True:
+                udp_sock.sendto(packet, (client_ip, client_port))
+
+                try:
+                    udp_sock.settimeout(1)
+                    ack, addr = udp_sock.recvfrom(1024)
+
+                    if addr[0] != client_ip:
+                        continue
+
+                    if ack.decode() == f"ACK {seq}":
+                        break
+
+                except socket.timeout:
+                    print(f"[UDP] Resend {seq}")
+
+            seq += 1
+
+    udp_sock.sendto(b"END", (client_ip, client_port))
+    udp_sock.close()
+
+
+def handle_client(conn, addr):
+    print(f"[TCP] Connected {addr}")
+
+    try:
+        data = conn.recv(1024).decode()
+        cmd, filename, offset = data.split()
+        offset = int(offset)
+
+        if not os.path.exists(filename):
+            conn.send(b"ERROR")
+            return
+
+        filesize = os.path.getsize(filename)
+        filehash = get_hash(filename)
+
+        # client will open UDP socket → send port
+        udp_port = int(conn.recv(1024).decode())
+
+        # send metadata securely
+        meta = f"META {filesize} {filehash}"
+        conn.send(meta.encode())
+
+        # start UDP transfer
+        udp_transfer(filename, offset, addr[0], udp_port)
+
+    finally:
+        conn.close()
+        print(f"[TCP] Closed {addr}")
+
+
+# TCP + SSL setup
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(certfile=CERT, keyfile=KEY)
+
+tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+tcp_sock.bind((SERVER_IP, TCP_PORT))
+tcp_sock.listen(5)
+
+print(f"[SERVER] Secure TCP listening on {TCP_PORT}")
+
+while True:
+    client_sock, addr = tcp_sock.accept()
+    secure_conn = context.wrap_socket(client_sock, server_side=True)
+
+    threading.Thread(
+        target=handle_client,
+        args=(secure_conn, addr),
+        daemon=True
+    ).start()
