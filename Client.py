@@ -16,15 +16,14 @@ def get_hash(filename):
     return h.hexdigest()
 
 
-filename = input("Enter filename: ")
+filename = input("enter filename: ")
 
 offset = 0
 if os.path.exists(filename):
     offset = os.path.getsize(filename)
-    print(f"[CLIENT] Resuming from {offset}")
+    print(f"[CLIENT] continue from {offset}")
 
 
-# TCP SSL connection
 context = ssl.create_default_context()
 context.check_hostname = False
 context.verify_mode = ssl.CERT_NONE
@@ -37,7 +36,6 @@ secure_sock.connect((SERVER_IP, TCP_PORT))
 secure_sock.send(f"GET {filename} {offset}".encode())
 
 
-# UDP socket
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 udp_sock.bind(("0.0.0.0", 0))
 
@@ -45,7 +43,6 @@ udp_port = udp_sock.getsockname()[1]
 secure_sock.send(str(udp_port).encode())
 
 
-# receive metadata
 meta = secure_sock.recv(1024).decode()
 if meta == "ERROR":
     print("File not found")
@@ -78,14 +75,12 @@ with open(filename, mode) as f:
 udp_sock.close()
 secure_sock.close()
 
-
-# integrity check
 local_hash = get_hash(filename)
 
 print("Server:", server_hash)
 print("Local :", local_hash)
 
 if local_hash == server_hash:
-    print("[CLIENT] Integrity OK")
+    print("[CLIENT] ok")
 else:
-    print("[CLIENT] Corrupted")
+    print("[CLIENT] corrupted")

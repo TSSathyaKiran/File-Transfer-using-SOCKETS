@@ -48,7 +48,7 @@ def udp_transfer(filename, offset, client_ip, client_port):
                         break
 
                 except socket.timeout:
-                    print(f"[UDP] Resend {seq}")
+                    print(f"[UDP] resend {seq}")
 
             seq += 1
 
@@ -71,14 +71,11 @@ def handle_client(conn, addr):
         filesize = os.path.getsize(filename)
         filehash = get_hash(filename)
 
-        # client will open UDP socket → send port
         udp_port = int(conn.recv(1024).decode())
 
-        # send metadata securely
         meta = f"META {filesize} {filehash}"
         conn.send(meta.encode())
 
-        # start UDP transfer
         udp_transfer(filename, offset, addr[0], udp_port)
 
     finally:
@@ -86,7 +83,6 @@ def handle_client(conn, addr):
         print(f"[TCP] Closed {addr}")
 
 
-# TCP + SSL setup
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(certfile=CERT, keyfile=KEY)
 
@@ -94,7 +90,7 @@ tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 tcp_sock.bind((SERVER_IP, TCP_PORT))
 tcp_sock.listen(5)
 
-print(f"[SERVER] Secure TCP listening on {TCP_PORT}")
+print(f"[SERVER] listening on {TCP_PORT}")
 
 while True:
     client_sock, addr = tcp_sock.accept()
